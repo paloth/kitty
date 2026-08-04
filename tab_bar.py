@@ -20,7 +20,8 @@ clock_color = as_rgb(color_as_int(opts.color9))
 date_color = as_rgb(color_as_int(opts.color15))
 SEPARATOR_SYMBOL, SOFT_SEPARATOR_SYMBOL = ("", "")
 RIGHT_MARGIN = 1
-REFRESH_TIME = 1
+# Fire just *after* the minute boundary so the new HH:MM is what gets drawn.
+REFRESH_SKEW = 0.05
 ICON = "  "
 
 def _draw_icon(screen: Screen, index: int) -> int:
@@ -78,10 +79,26 @@ def _draw_right_status(screen: Screen, is_last: bool, cells: list) -> int:
     return screen.cursor.x
 
 
-def _redraw_tab_bar(_):
+def _schedule_next_redraw() -> None:
+    """Wake once per minute, on the boundary, instead of once per second.
+
+    The right-hand status only renders down to minutes, so a repeating 1s timer
+    redrew the whole tab bar ~60x more often than its output could change --
+    forever, including while idle and unfocused. Re-arming a one-shot timer from
+    the clock itself also means it cannot drift, and self-corrects across DST
+    changes and sleep/wake.
+    """
+    global timer_id
+    now = datetime.now()
+    delay = 60 - (now.second + now.microsecond / 1_000_000) + REFRESH_SKEW
+    timer_id = add_timer(_redraw_tab_bar, delay, False)
+
+
+def _redraw_tab_bar(_) -> None:
     tm = get_boss().active_tab_manager
     if tm is not None:
         tm.mark_tab_bar_dirty()
+    _schedule_next_redraw()
 
 
 timer_id = None
@@ -97,10 +114,9 @@ def draw_tab(
     is_last: bool,
     extra_data: ExtraData,
 ) -> int:
-    global timer_id
     global right_status_length
     if timer_id is None:
-        timer_id = add_timer(_redraw_tab_bar, REFRESH_TIME, True)
+        _schedule_next_redraw()
     clock = datetime.now().strftime(" %H:%M")
     date = datetime.now().strftime(" %d.%m.%Y")
     cells = []
